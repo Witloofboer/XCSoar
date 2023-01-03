@@ -50,6 +50,9 @@ public:
                   const DerivedInfo &calculated) override;
 private:
   bool POV(NMEAInputLine &line, NMEAInfo &info);
+  bool ATT(NMEAInputLine &line, NMEAInfo &info);
+  bool WND(NMEAInputLine &line, NMEAInfo &info);
+  bool MWD(NMEAInputLine &line, NMEAInfo &info);
   bool ComposeWrite(const char p_type,PolarCoefficients &p,
                   OperationEnvironment &env);
   bool InformUnavailable(const char *obj, OperationEnvironment &env);
@@ -79,6 +82,22 @@ private:
   PolarCoefficients _real_polar; 
   bool _real_polar_valid = false;
 };
+
+static bool
+ReadSpeedVector(NMEAInputLine &line, SpeedVector &value_r)
+{
+    double norm, bearing;
+
+    bool norm_valid = line.ReadChecked(norm);
+    bool bearing_valid = line.ReadChecked(bearing);
+
+    if (bearing_valid && norm_valid) {
+        value_r.norm = Units::ToSysUnit(norm, Unit::KILOMETER_PER_HOUR);
+        value_r.bearing = Angle::Degrees(bearing);
+        return true;
+    } else
+        return false;
+}
 
 constexpr bool
 LarusDevice::IsEqual(const PolarCoefficients &p1, const PolarCoefficients &p2)
@@ -268,8 +287,68 @@ LarusDevice::ParseNMEA(const char *_line, NMEAInfo &info)
   NMEAInputLine line(_line);
   if (line.ReadCompare("$POV"))
     return POV(line, info);
+  else if (line.ReadCompare("$ATT"))
+    return ATT(line, info);
+  else if (line.ReadCompare("$WND"))
+    return WND(line, info);
+  else if (line.ReadCompare("$MWD"))
+    return MWD(line, info);
 
   return false;
+}
+
+bool
+LarusDevice::ATT(NMEAInputLine &line, NMEAInfo &info)
+{
+    /*
+     $ATT,<roll>,<pitch>,<yaw>
+        AHRS attitude
+     */
+  double value;
+
+  if (line.ReadChecked(value)) {
+    info.attitude.bank_angle = Angle::Degrees(value);
+    info.attitude.bank_angle_available.Update(info.clock);
+  }
+  if (line.ReadChecked(value)) {
+    info.attitude.pitch_angle = Angle::Degrees(value);
+    info.attitude.bank_angle_available.Update(info.clock);
+  }
+  /*if (line.ReadChecked(value))
+    info.attitude.yaw_angle = Angle::Degrees(value);
+    info.attitude.yaw_angle_available.Update(info.clock);*/
+
+  return true;
+}
+
+bool
+LarusDevice::WND(NMEAInputLine &line, NMEAInfo &info)
+{
+    /*
+     $WND,<direction>,<speed>
+        Instantaneous wind direction and speed
+     */
+
+    SpeedVector wind;
+    if (ReadSpeedVector(line, wind))
+        info.ProvideExternalInstantaneousWind(wind);
+
+    return true;
+}
+
+bool
+LarusDevice::MWD(NMEAInputLine &line, NMEAInfo &info)
+{
+    /*
+     $MWD,<direction>,<speed>
+        Average wind direction and speed
+     */
+
+    SpeedVector wind;
+    if (ReadSpeedVector(line, wind))
+        info.ProvideExternalWind(wind);
+
+    return true;
 }
 
 bool
@@ -288,7 +367,6 @@ LarusDevice::POV(NMEAInputLine &line, NMEAInfo &info)
    * ?: respond with selected strings, e.g. Ballast, Bugs, Polar
    *    Example: $POV,?,RPO,MC,WL*2E means: Real Polar, MacCready, Wing Load
    */
-
 
   while (!line.IsEmpty()) {
     char type = line.ReadOneChar();
@@ -318,63 +396,61 @@ LarusDevice::POV(NMEAInputLine &line, NMEAInfo &info)
     }
 
     double value;
-    if (!line.ReadChecked(value))
-      break;
 
     switch (type) {
       case 'E': {
+        if (!line.ReadChecked(value))
+          break;
         info.ProvideTotalEnergyVario(value);
         break;
       }
       case 'H': {
-          info.humidity_available = true;
-          info.humidity = value;
+        if (!line.ReadChecked(value))
           break;
+        info.humidity_available = true;
+        info.humidity = value;
+        break;
       }
       case 'P': {
+        if (!line.ReadChecked(value))
+          break;
         AtmosphericPressure pressure = AtmosphericPressure::HectoPascal(value);
         info.ProvideStaticPressure(pressure);
         break;
       }
       case 'Q': {
+        if (!line.ReadChecked(value))
+          break;
         AtmosphericPressure pressure = AtmosphericPressure::Pascal(value);
         info.ProvideDynamicPressure(pressure);
         break;
       }
-      /**case 'R': {
+      case 'R': {
+        if (!line.ReadChecked(value))
+          break;
         AtmosphericPressure pressure = AtmosphericPressure::HectoPascal(value);
         info.ProvidePitotPressure(pressure);
         break;
-      }**/
+      }
       case 'S': {
+        if (!line.ReadChecked(value))
+          break;
         value = Units::ToSysUnit(value, Unit::KILOMETER_PER_HOUR);
         info.ProvideTrueAirspeed(value);
         break;
       }
       case 'T': {
+        if (!line.ReadChecked(value))
+          break;
         info.temperature = Temperature::FromCelsius(value);
         info.temperature_available = true;
         break;
       }
       case 'V': {
+        if (!line.ReadChecked(value))
+          break;
         info.voltage = value;
         info.voltage_available.Update(info.clock);
-        break;
-      }
-      // R needs to be swapped for other sentence
-      case 'R': {
-        info.attitude.bank_angle = Angle::Degrees(value);
-        info.attitude.bank_angle_available.Update(info.clock);
-        break;
-      }
-      case 'N': {
-        info.attitude.pitch_angle = Angle::Degrees(value);
-        info.attitude.pitch_angle_available.Update(info.clock);
-        break;
-      }
-      case 'Y': {
-        info.attitude.heading = Angle::Degrees(value);
-        info.attitude.heading_available.Update(info.clock);
         break;
       }
     }
