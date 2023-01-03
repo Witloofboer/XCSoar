@@ -153,6 +153,7 @@ NMEAInfo::Reset()
   settings.Clear();
 
   external_wind_available.Clear();
+  external_instantaneous_wind_available.Clear();
 
   temperature_available = false;
   humidity_available = false;
@@ -236,6 +237,7 @@ NMEAInfo::Expire()
   netto_vario_available.Expire(clock, std::chrono::seconds(5));
   settings.Expire(clock);
   external_wind_available.Expire(clock, std::chrono::minutes(10));
+  external_instantaneous_wind_available.Expire(clock, std::chrono::seconds(30));
   heart_rate_available.Expire(clock, std::chrono::seconds(10));
   engine_noise_level_available.Expire(clock, std::chrono::seconds(30));
   voltage_available.Expire(clock, std::chrono::minutes(5));
@@ -325,6 +327,9 @@ NMEAInfo::Complement(const NMEAInfo &add)
 
   if (external_wind_available.Complement(add.external_wind_available))
     external_wind = add.external_wind;
+
+  if (external_instantaneous_wind_available.Complement(add.external_instantaneous_wind_available))
+    external_instantaneous_wind = add.external_instantaneous_wind;
 
   if (!temperature_available && add.temperature_available) {
     temperature = add.temperature;
