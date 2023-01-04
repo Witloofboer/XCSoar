@@ -50,9 +50,7 @@ public:
                   const DerivedInfo &calculated) override;
 private:
   bool POV(NMEAInputLine &line, NMEAInfo &info);
-  bool ATT(NMEAInputLine &line, NMEAInfo &info);
-  bool WND(NMEAInputLine &line, NMEAInfo &info);
-  bool MWD(NMEAInputLine &line, NMEAInfo &info);
+  bool PLARW(NMEAInputLine &line, NMEAInfo &info);
   bool ComposeWrite(const char p_type,PolarCoefficients &p,
                   OperationEnvironment &env);
   bool InformUnavailable(const char *obj, OperationEnvironment &env);
@@ -83,20 +81,21 @@ private:
   bool _real_polar_valid = false;
 };
 
+/**
+ * Parses non-negative floating-point angle value in degrees.
+ */
 static bool
-ReadSpeedVector(NMEAInputLine &line, SpeedVector &value_r)
+ReadBearing(NMEAInputLine &line, Angle &value_r)
 {
-    double norm, bearing;
-
-    bool norm_valid = line.ReadChecked(norm);
-    bool bearing_valid = line.ReadChecked(bearing);
-
-    if (bearing_valid && norm_valid) {
-        value_r.norm = Units::ToSysUnit(norm, Unit::KILOMETER_PER_HOUR);
-        value_r.bearing = Angle::Degrees(bearing);
-        return true;
-    } else
+    double value;
+    if (!line.ReadChecked(value))
         return false;
+
+    if (value < 0 || value > 360)
+        return false;
+
+    value_r = Angle::Degrees(value).AsBearing();
+    return true;
 }
 
 constexpr bool
@@ -285,68 +284,72 @@ LarusDevice::ParseNMEA(const char *_line, NMEAInfo &info)
     return false;
 
   NMEAInputLine line(_line);
-  if (line.ReadCompare("$POV"))
+  if (line.ReadCompare("$PLARW"))
+    return PLARW(line, info);
+  else if (line.ReadCompare("$POV"))
     return POV(line, info);
-  else if (line.ReadCompare("$ATT"))
-    return ATT(line, info);
-  else if (line.ReadCompare("$WND"))
-    return WND(line, info);
-  else if (line.ReadCompare("$MWD"))
-    return MWD(line, info);
 
   return false;
 }
 
 bool
-LarusDevice::ATT(NMEAInputLine &line, NMEAInfo &info)
+LarusDevice::PLARW(NMEAInputLine &line, NMEAInfo &info)
 {
     /*
-     $ATT,<roll>,<pitch>,<yaw>
-        AHRS attitude
-     */
-  double value;
+      * $PLARW,x.x,a,x.x,a,a,a*hh
+      *
+      * Field Number:
+      *  1) wind angle
+      *  2) (R)elative or (T)rue
+      *  3) wind speed
+      *  4) K/M/N
+      *  5) (A)verage or (I)nstantaneous
+      *  6) Status A=valid
+      *  7) Checksum
+      */
 
-  if (line.ReadChecked(value)) {
-    info.attitude.bank_angle = Angle::Degrees(value);
-    info.attitude.bank_angle_available.Update(info.clock);
-  }
-  if (line.ReadChecked(value)) {
-    info.attitude.pitch_angle = Angle::Degrees(value);
-    info.attitude.bank_angle_available.Update(info.clock);
-  }
-  /*if (line.ReadChecked(value))
-    info.attitude.yaw_angle = Angle::Degrees(value);
-    info.attitude.yaw_angle_available.Update(info.clock);*/
+    Angle winddir;
+    if (!ReadBearing(line, winddir))
+        return false;
 
-  return true;
-}
+    char ch = line.ReadOneChar();
 
-bool
-LarusDevice::WND(NMEAInputLine &line, NMEAInfo &info)
-{
-    /*
-     $WND,<direction>,<speed>
-        Instantaneous wind direction and speed
-     */
+    double windspeed;
+    if (!line.ReadChecked(windspeed))
+        return false;
 
-    SpeedVector wind;
-    if (ReadSpeedVector(line, wind))
-        info.ProvideExternalInstantaneousWind(wind);
+    ch = line.ReadOneChar();
+    switch (ch) {
+        case 'N':
+            windspeed = Units::ToSysUnit(windspeed, Unit::KNOTS);
+            break;
 
-    return true;
-}
+        case 'K':
+            windspeed = Units::ToSysUnit(windspeed, Unit::KILOMETER_PER_HOUR);
+            break;
 
-bool
-LarusDevice::MWD(NMEAInputLine &line, NMEAInfo &info)
-{
-    /*
-     $MWD,<direction>,<speed>
-        Average wind direction and speed
-     */
+        case 'M':
+            windspeed = Units::ToSysUnit(windspeed, Unit::METER_PER_SECOND);
+            break;
 
-    SpeedVector wind;
-    if (ReadSpeedVector(line, wind))
-        info.ProvideExternalWind(wind);
+        default:
+            return false;
+    }
+
+    SpeedVector wind(winddir, windspeed);
+
+    ch = line.ReadOneChar();
+    switch (ch) {
+        case 'A':
+            info.ProvideExternalWind(wind);
+            break;
+        case 'I':
+            info.ProvideExternalInstantaneousWind(wind);
+            break;
+        default:
+            return false;
+
+    }
 
     return true;
 }
